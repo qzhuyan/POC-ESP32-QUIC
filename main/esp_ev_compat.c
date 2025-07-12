@@ -328,24 +328,6 @@ void ev_timer_stop(ev_loop *loop, ev_timer *watcher) {
     }
 }
 
-// Run the event loop
-void ev_run(ev_loop *loop, int flags) {
-    if (!loop) loop = EV_DEFAULT;
-    
-    // Mark as running
-    loop->running = true;
-    
-    // Start the IO monitor task if not already running
-    if (!loop->io_task_handle && loop->io_count > 0) {
-        xTaskCreate(io_monitor_task, "io_monitor", 8192, loop, 5, &loop->io_task_handle);
-    }
-    
-    // Wait until ev_break is called
-    while (loop->running) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-}
-
 // Break the event loop
 void ev_break(ev_loop *loop, int how) {
     if (!loop) loop = EV_DEFAULT;

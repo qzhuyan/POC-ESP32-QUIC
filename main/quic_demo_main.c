@@ -430,7 +430,7 @@ void app_main(void)
     
     // Create server info for QUIC client
     static ServerInfo_t serverInfo = {
-        .pHostName = "your.broker.host",
+        .pHostName = "broker.emqx.io",
         .port = 14567,
         .pAlpn = "mqtt"  // Use plain string instead of binary format
     };
