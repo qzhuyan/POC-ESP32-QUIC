@@ -352,15 +352,11 @@ static int client_quic_init(struct client *c,
     return -1;
   }
 
-  /* We use 0 len SCID*/
-  scid.datalen = 0;
-  /*
   scid.datalen = 8;
   if (RAND_bytes(scid.data, (int)scid.datalen) != 1) {
     fprintf(stderr, "RAND_bytes failed\n");
     return -1;
   }
-  */
   ngtcp2_settings_default(&settings);
 
   settings.initial_ts = timestamp();
@@ -734,33 +730,40 @@ static ssize_t client_write_application_data(struct client *c, const uint8_t *da
     ngtcp2_pkt_info pi;
     
     ngtcp2_path_storage_zero(&ps);
-    
-    ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(c->conn, &ps.path, &pi, buf, sizeof(buf),
-                                                   &wdatalen, flags, stream_id, &vec, 1, timestamp());
-    if (nwrite < 0) {
+
+    bool retry = false;
+    do {
+      ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(c->conn, &ps.path, &pi, buf, sizeof(buf),
+                                                      &wdatalen, flags, stream_id, &vec, 1, timestamp());
+      if (nwrite < 0) {
         if (nwrite == NGTCP2_ERR_WRITE_MORE) {
-            // Partial write, this is normal
-            ESP_LOGI(TAG, "Partial write: %zu bytes queued", (size_t)wdatalen);
+          // Partial write, this is normal
+          ESP_LOGI(TAG, "Partial write: %zu bytes queued", (size_t)wdatalen);
         } else {
-            ESP_LOGE(TAG, "ngtcp2_conn_writev_stream: %s", ngtcp2_strerror((int)nwrite));
-            return -1;
+          ESP_LOGE(TAG, "ngtcp2_conn_writev_stream: %s", ngtcp2_strerror((int)nwrite));
+          return -1;
         }
-    }
+      }
 
-    // Send the packet if we have data to send
-    if (nwrite > 0) {
+      // Send the packet if we have data to send
+      if (nwrite > 0) {
         if (client_send_packet(c, buf, (size_t)nwrite) != 0) {
-            ESP_LOGE(TAG, "client_send_packet failed");
-            return -1;
+          ESP_LOGE(TAG, "client_send_packet failed");
+          return -1;
         }
-        ESP_LOGI(TAG, "Sent QUIC packet with %zu bytes, stream data: %zu bytes", (size_t)nwrite, (size_t)wdatalen);
-    }
+        ESP_LOGI(TAG, "Sent QUIC packet with %zu bytes, stream data: %lu bytes", (size_t)nwrite, wdatalen);
+      }
 
-    if (nwrite == 0)
-    {
+      if (nwrite == 0)
+      {
         ESP_LOGI(TAG, "Cannot send QUIC packet with %zu bytes, stream data: %zu bytes", (size_t)nwrite, (size_t)wdatalen);
-    }
-    
+      }
+
+      // retry when NO STREAM Frame is sent
+      // it happens when ngtpc2 cannot fit a STREAM frame in the buf that we sent
+      retry = wdatalen == -1;
+    } while(retry);
+
     return 0;
 }
 
@@ -786,7 +789,10 @@ int client_read_application_data(struct client *c, uint8_t *buffer, size_t buffe
         return 0;
     }
     
-    // We need to read from the network
+    // We DONT need to read from the network
+    // We have another async reader,
+    // For demo, this is good for now.
+    /*
     if (client_read(c) != 0) {
         ESP_LOGE(TAG, "client_read failed");
         return -1;
@@ -797,7 +803,7 @@ int client_read_application_data(struct client *c, uint8_t *buffer, size_t buffe
         // We have data in the buffer now, call ourselves recursively
         return client_read_application_data(c, buffer, buffer_size, bytes_read);
     }
-    
+    */
     // No data available at this time
     return -2;  // Special code for no data
 }
@@ -806,8 +812,7 @@ int recv_stream_data(ngtcp2_conn *conn, uint32_t flags,
                     int64_t stream_id, uint64_t offset,
                     const uint8_t *data, size_t datalen,
                     void *user_data, void *stream_user_data) {
-    struct client *c = user_data;
-    
+
     // Store the received data in our buffer
     if (datalen > 0 && app_recv_buffer_len + datalen <= APP_BUFFER_SIZE) {
         memcpy(app_recv_buffer + app_recv_buffer_len, data, datalen);
@@ -909,7 +914,8 @@ int quic_client_process(void) {
         result = -1;
         goto cleanup;
     }
-    
+
+
     // Read from the socket and handle packets
     result = client_read(&g_client);
     if (result != 0) {
@@ -926,7 +932,7 @@ int quic_client_process(void) {
         ESP_LOGE(TAG, "client_write failed: %d", result);
         goto cleanup;
     }
-    
+
     // Update connection state
     if (g_client.conn && !g_quic_handshake_completed) {
         g_quic_handshake_completed = true;

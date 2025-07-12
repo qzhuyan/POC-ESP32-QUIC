@@ -56,6 +56,8 @@ extern struct client g_client;
 
 static const char *TAG = "quic_demo_main";
 
+static uint8_t gbuffer[2048];  // Buffer for MQTT messages
+
 // MQTT application callback
 static void eventCallback(MQTTContext_t *pContext,
                          MQTTPacketInfo_t *pPacketInfo,
@@ -235,22 +237,17 @@ void combined_quic_mqtt_task(void *pvParameters)
         return;
     }
     
-    // Set up the transport interface structure
+    // Set up the transport interface structure for core MQTT
     extern TransportInterface_t xTransportInterface;
     xTransportInterface.pNetworkContext = &networkContext;
     xTransportInterface.recv = mqtt_quic_transport_recv;
     xTransportInterface.send = mqtt_quic_transport_send;
     
-    ESP_LOGI(TAG, "Transport interface configured:");
-    ESP_LOGI(TAG, "  pNetworkContext: %p", xTransportInterface.pNetworkContext);
-    ESP_LOGI(TAG, "  recv function: %p", xTransportInterface.recv);
-    ESP_LOGI(TAG, "  send function: %p", xTransportInterface.send);
-
     // Initialize MQTT library
+    // @FIXME: this buffer isn't thread safe.
     MQTTFixedBuffer_t networkBuffer;
-    uint8_t buffer[512];  // Reduced from 1024 to save memory
-    networkBuffer.pBuffer = buffer;
-    networkBuffer.size = sizeof(buffer);
+    networkBuffer.pBuffer = gbuffer;
+    networkBuffer.size = sizeof(gbuffer);
     
     ESP_LOGD(TAG, "Free heap before MQTT init: %u bytes", esp_get_free_heap_size());
     
@@ -304,16 +301,6 @@ void combined_quic_mqtt_task(void *pvParameters)
     ESP_LOGI(TAG, "Waiting for CONNACK processing...");
     vTaskDelay(pdMS_TO_TICKS(1000));
     
-    // Process any pending MQTT messages (including CONNACK)
-    ESP_LOGI(TAG, "Processing pending MQTT messages...");
-    for (int i = 0; i < 5; i++) {
-        mqttStatus = MQTT_ProcessLoop(&mqttContext);
-        if (mqttStatus != MQTTSuccess) {
-            ESP_LOGW(TAG, "MQTT_ProcessLoop failed during CONNACK processing, error %d", mqttStatus);
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
     // Subscribe to a topic
     MQTTSubscribeInfo_t subscribeInfo;
     subscribeInfo.qos = MQTTQoS0;
